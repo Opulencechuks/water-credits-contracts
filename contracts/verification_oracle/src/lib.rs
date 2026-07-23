@@ -284,8 +284,27 @@ pub fn sha256_commitment(
 ///
 /// Even-length median: `(sorted[n/2-1] + sorted[n/2]) / 2` (Rust integer
 /// division truncates toward zero, matching the historical behaviour).
-fn median_i64(values: &Vec<i64>) -> i64 {
+/// Compute the median of a `Vec<i64>`. Copies values into a local fixed-size
+/// array (max 10 elements, matching `max_oracles`) and uses an insertion sort
+/// on the stack — zero Soroban host allocations. For the hard config bound of
+/// `max_oracles = 10` this runs at most 45 local comparisons, a dramatic
+/// improvement over the previous O(n²) host-call-based insertion sort.
+///
+/// Even-length median: `(sorted[n/2-1] + sorted[n/2]) / 2` (Rust integer
+/// division truncates toward zero, matching the historical behaviour).
+///
+/// # Bug fix (fuzz testing)
+/// The previous implementation did `arr[a] + arr[b]` in `i64`, which overflows
+/// when both middle values are near `i64::MAX` or `i64::MIN` (e.g. `[MAX, MAX]`).
+/// In debug this panics, in release it wraps to a wildly incorrect median.
+/// The fix promotes to `i128` before addition, computes the average in `i128`,
+/// then truncates back to `i64` — the average of two `i64` values always fits
+/// in `i64`.
+pub fn median_i64(values: &Vec<i64>) -> i64 {
     let n = values.len() as usize;
+    if n == 0 {
+        panic!("median of empty vec");
+    }
     // `max_oracles = 10` is a hard config bound enforced at `add_oracle`,
     // so `n` is always in [1, 10].
     let mut arr = [0i64; 10];
@@ -303,7 +322,9 @@ fn median_i64(values: &Vec<i64>) -> i64 {
         arr[j] = key;
     }
     if n % 2 == 0 {
-        (arr[n / 2 - 1] + arr[n / 2]) / 2
+        let a = arr[n / 2 - 1] as i128;
+        let b = arr[n / 2] as i128;
+        ((a + b) / 2) as i64
     } else {
         arr[n / 2]
     }
