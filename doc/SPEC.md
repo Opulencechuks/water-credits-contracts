@@ -36,7 +36,10 @@ the factory. Credits are transferable and retirable.
 | `transfer_from(spender, from, to, amount)` | spender | Move credits via allowance |
 | `approve(from, spender, amount, expiration_ledger)` | from | Grant allowance |
 | `retire(holder, amount, purpose, metadata_uri)` | holder | Permanently retire credits → certificate |
-| `set_admin(admin, new_admin)` | admin | Rotate admin key |
+| `set_admin(admin, new_admin)` | admin | Legacy alias for propose_admin with zero delay |
+| `propose_admin(admin, new_admin, delay_secs)` | admin | Propose a new admin with a timelock (default 86400s) |
+| `accept_admin(new_admin)` | new_admin | Accept admin role after timelock |
+| `cancel_admin_proposal(admin)` | admin | Cancel pending admin proposal |
 | `set_minter(admin, minter)` | admin | Delegate minting authority |
 | `set_retirement_registry(admin, registry)` | admin | Link global retirement ledger |
 | `set_max_supply(admin, max)` | admin | Set per-project credit ceiling (0 = uncapped) |
@@ -525,6 +528,8 @@ The following properties must hold at all times:
 | `xfer` | `credit_token` | `(from, to, amount)` | Transfer |
 | `retired` | `credit_token` | `(holder, amount, certificate)` | Retire |
 | `burned` | `credit_token` | `(from, amount, total_burned)` | Admin burn; `total_burned` is the running accumulator after this operation |
+| `adm_prop` | `credit_token` | `(admin, new_admin, delay_secs)` | Admin proposed |
+| `adm_xfer` | `credit_token` | `(old_admin, new_admin)` | Admin rights transferred |
 | `proj_reg` | `credit_factory` | `(project_id,)` | Project registered |
 | `rdng_vrfy` | `verification_oracle` | `(project_id, result)` | Window finalized |
 | `orc_stk` | `verification_oracle` | `(oracle, amount)` | Oracle stakes tokens |
