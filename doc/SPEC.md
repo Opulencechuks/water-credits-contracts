@@ -32,6 +32,7 @@ the factory. Credits are transferable and retirable.
 | `mint_to(minter, to, amount)` | minter or admin | Mint credits, respects MaxSupply cap |
 | `batch_mint_to(minter, recipients, amounts)` | minter or admin | Mint to multiple addresses atomically |
 | `burn(admin, from, amount)` | admin | Destroy credits without retirement record |
+| `burn_with_reason(admin, from, amount, reason)` | admin | Destroy credits with a documented reason code |
 | `transfer(from, to, amount)` | from | Move credits between wallets |
 | `transfer_from(spender, from, to, amount)` | spender | Move credits via allowance |
 | `approve(from, spender, amount, expiration_ledger)` | from | Grant allowance |
@@ -59,8 +60,9 @@ the factory. Credits are transferable and retirable.
 #### Pause semantics
 
 While paused, `mint_to`, `batch_mint_to`, `transfer`, `transfer_from`, and
-`retire` all panic with `"contract is paused"`. Read-only queries remain
-available. The pause does not persist across upgrades — re-initialization would
+`retire` all panic with `"contract is paused"`. `burn` and `burn_with_reason`
+are explicitly allowed while paused to support emergency administrative recalls.
+Read-only queries remain available. The pause does not persist across upgrades — re-initialization would
 clear it.
 
 #### Supply cap semantics
@@ -228,8 +230,8 @@ its reveals without increasing either per-oracle reputation counter.
 Given medians of all sensor fields across the `min_oracles` submissions:
 
 ```
-N_removed = max(0, baseline_N - med_N) * med_flow * 3600 / 1_000_000   (kg)
-P_removed = max(0, baseline_P - med_P) * med_flow * 3600 / 1_000_000   (kg)
+N_removed = max(0, baseline_N - med_N) * med_flow * window_secs / 1_000_000   (kg)
+P_removed = max(0, baseline_P - med_P) * med_flow * window_secs / 1_000_000   (kg)
 
 quality_penalty = 0..8000 bps based on pH, turbidity, DO, temperature
 
@@ -240,6 +242,33 @@ total = gross * (10_000 - quality_penalty) / 10_000
 ```
 
 All sensor values are fixed-point integers (see MATH.md for scale factors).
+
+#### Monitoring window (`window_secs`)
+
+`window_secs` is the length of the monitoring window in seconds — the `Δt` that
+turns an instantaneous flow rate into a volume over the reporting period. It was
+previously hardcoded to `3600`, which made credits correct only for deployments
+submitting exactly hourly: a 30-minute interval double-counted, a 6-hour interval
+under-counted 6×.
+
+| Property | Value |
+|---|---|
+| Storage | `OracleConfig::window_secs` (instance storage, part of the global config) |
+| Default | `3600` — set in `initialize`, so existing deployments are unaffected |
+| Valid range | `60 ≤ window_secs ≤ 86_400` (1 minute to 1 day), exported as `MIN_WINDOW_SECS` / `MAX_WINDOW_SECS` |
+| Validated in | `update_config` — out-of-range values panic with `window_secs out of valid range [60, 86400]` and leave the stored config untouched |
+| Applied in | `compute_finalization`, reached from both `submit_reading_impl` and `finalize_reveals`, each passing `config.window_secs` |
+
+Only the nutrient-removal terms scale with the window; `volumetric_credit` is a
+flow-rate credit with no `Δt` factor and is unchanged by it. Admins must keep
+`window_secs` in step with the interval at which the deployment's oracles
+actually submit — see doc/MATH.md §3 for the derivation and §8 Example F for a
+worked 30-minute window.
+
+The upper bound is also an overflow bound: the `× window_secs` step uses
+`checked_mul`, and raising the ceiling from `3600` to `86_400` makes the
+intermediate product 24× larger. Values beyond the bound are rejected at
+configuration time rather than reverting later at credit issuance.
 
 #### Oracle staking and slashing
 
@@ -367,6 +396,9 @@ queried or listed by any caller.
 |---|---|---|
 | `update_owner(caller, project_id, new_owner)` | admin or current owner | Transfer project ownership |
 
+Project IDs are derived with the same canonical scheme the factory uses — see
+[§2.5 Project ID derivation](#project-id-derivation).
+
 ---
 
 ### 2.5 credit_factory
@@ -378,6 +410,42 @@ Deploys new `credit_token` instances and maintains a project index.
 | Function | Auth | Description |
 |---|---|---|
 | `update_project_owner(caller, project_id, new_owner)` | admin or current owner | Transfer project ownership in factory index |
+
+#### Project ID derivation
+
+`credit_factory` and `project_registry` both derive the project ID through
+`shared::generate_project_id`, so a project mirrored into both contracts at the
+same ordinal gets the same 32-byte ID.
+
+```
+project_id = SHA-256(
+    count               : u64  big-endian, 8 bytes
+  | len(name)           : u32  big-endian, 4 bytes
+  | name                : UTF-8 bytes, len(name) bytes
+  | len(methodology)    : u32  big-endian, 4 bytes
+  | methodology         : UTF-8 bytes, len(methodology) bytes
+  | latitude            : i64  big-endian, 8 bytes (×10⁶, WGS84)
+  | longitude           : i64  big-endian, 8 bytes (×10⁶, WGS84)
+  | area_hectares       : u64  big-endian, 8 bytes
+)
+```
+
+- `count` is the registering contract's project counter *before* the
+  registration (`0` for the first project). It is the only uniqueness-bearing
+  field when two registrations share identical details.
+- `name` and `methodology` are length-prefixed so that different field splits
+  cannot collide (e.g. `name="AB", methodology="C"` vs `name="A",
+  methodology="BC"`). Both are rejected above 128 bytes.
+- The **ledger timestamp is not an input** (Issue #96). Hashing it made the ID
+  depend on which ledger the registration transaction landed in, so a
+  one-ledger delay from a fee bump or congestion changed the ID and broke any
+  off-chain system pre-computing it. The registration timestamp is still stored
+  — `ProjectInfo.registration_date` in the factory, `ProjectEntry.registered_at`
+  in the registry — purely as display metadata.
+
+Because the derivation is a pure function of values the caller already knows, an
+off-chain system can compute the ID before submitting the transaction: read
+`project_count()`, hash the preimage above, and the returned ID will match.
 
 ---
 
@@ -527,9 +595,7 @@ The following properties must hold at all times:
 | `minted` | `credit_token` | `(to, amount)` | Per mint (including batch) |
 | `xfer` | `credit_token` | `(from, to, amount)` | Transfer |
 | `retired` | `credit_token` | `(holder, amount, certificate)` | Retire |
-| `burned` | `credit_token` | `(from, amount, total_burned)` | Admin burn; `total_burned` is the running accumulator after this operation |
-| `adm_prop` | `credit_token` | `(admin, new_admin, delay_secs)` | Admin proposed |
-| `adm_xfer` | `credit_token` | `(old_admin, new_admin)` | Admin rights transferred |
+| `burned` | `credit_token` | `(from, amount, total_burned)` OR `(from, amount, total_burned, reason)` | Admin burn; `total_burned` is the running accumulator after this operation. Includes reason if called via `burn_with_reason`. |
 | `proj_reg` | `credit_factory` | `(project_id,)` | Project registered |
 | `rdng_vrfy` | `verification_oracle` | `(project_id, result)` | Window finalized |
 | `orc_stk` | `verification_oracle` | `(oracle, amount)` | Oracle stakes tokens |

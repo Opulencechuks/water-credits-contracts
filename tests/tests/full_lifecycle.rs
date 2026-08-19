@@ -36,9 +36,8 @@
 //! `project_registry` and `credit_factory` are independent contracts — the
 //! factory does not write into `project_registry`, so a deployment must
 //! register the project in both places. Both derive IDs with
-//! `shared::generate_project_id(count, timestamp)`, so mirrored
-//! registrations made in the same ledger with the same ordinal produce the
-//! same project ID, which this test asserts.
+//! `shared::generate_project_id(count, ...)`, so mirrored registrations made
+//! with the same ordinal produce the same project ID, which this test asserts.
 
 use credit_factory::{CreditFactory, CreditFactoryClient};
 use credit_token::{CreditTokenClient, RetirementCertificate};
@@ -51,7 +50,7 @@ use soroban_sdk::{
     vec, Address, Bytes, BytesN, Env, String, Symbol, TryFromVal, Val,
 };
 use verification_oracle::{
-    sha256_commitment, OracleConfig, RevealParams, VerificationOracle, VerificationOracleClient,
+    sha256_commitment, RevealParams, VerificationOracle, VerificationOracleClient,
     VerificationResult,
 };
 
@@ -129,38 +128,14 @@ fn test_full_six_contract_lifecycle() {
     assert_eq!(factory.admin(), admin);
     assert_eq!(factory.project_count(), 0);
 
-    // 6. verification_oracle — staking disabled (min_stake = 0) because
-    // integration tests have no live staking token; min_oracles stays 3 to
-    // match the three-oracle submission flow below.
+    // 6. verification_oracle — staking is disabled by default (min_stake = 0)
+    // because integration tests have no live staking token, and min_oracles
+    // already defaults to 3 to match the three-oracle submission flow below.
     let oracle_id = e.register_contract(None, VerificationOracle);
     let oracle = VerificationOracleClient::new(&e, &oracle_id);
     let staking_token = Address::generate(&e);
     let treasury = Address::generate(&e);
     oracle.initialize(&admin, &staking_token, &treasury);
-    oracle.update_config(
-        &admin,
-        &OracleConfig {
-            min_oracles: 3,
-            max_oracles: 10,
-            quality_threshold_ph: 600,
-            quality_threshold_ph_max: 700,
-            quality_threshold_turbidity: 50,
-            quality_threshold_do: 50,
-            quality_threshold_temp: 300,
-            credit_per_kg_n: 10,
-            credit_per_kg_p: 20,
-            staking_token,
-            treasury,
-            min_stake: 0,
-            unstake_cooldown_secs: 86400,
-            commit_phase_secs: 300,
-            min_reveal_ledgers: 0,
-            max_reveal_ledgers: 60,
-            slash_pct_bps: 1000,
-            min_slash_amount: 0,
-            max_slash_amount: i128::MAX,
-        },
-    );
 
     // 7. retirement_registry
     let retirement_registry_id = e.register_contract(None, RetirementRegistry);
@@ -215,8 +190,8 @@ fn test_full_six_contract_lifecycle() {
     // Mirror the registration in project_registry. The two contracts are
     // NOT integrated (the factory does not call the registry) — see the
     // module docs; this is the documented follow-up gap. Both use
-    // shared::generate_project_id(count, timestamp), so the mirrored entry
-    // gets the same canonical ID.
+    // shared::generate_project_id(count, ...), so the mirrored entry gets the
+    // same canonical ID.
     let registry_project_id = project_registry.register(
         &admin,
         &name,

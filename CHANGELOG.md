@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `credit_factory`: `stat_chg` on `update_project_status`, `ownr_chg` on `update_project_owner`, `init` on `initialize`
   - `credit_token`: `approved` on `approve`, `adm_xfer` on `set_admin`, `init` on `initialize`
   - `governance` and `verification_oracle`: `adm_xfer` on `transfer_admin`, `init` on `initialize`
+- `verification_oracle`: `OracleConfig::window_secs` makes the monitoring window a configurable parameter of the nutrient-removal formula instead of a hardcoded `3600`. Defaults to `3600` (unchanged behaviour), validated by `update_config` to `[60, 86400]` and exported as `MIN_WINDOW_SECS` / `MAX_WINDOW_SECS`. Deployments not on an exact hourly interval previously received systematically wrong credits — 2× for a 30-minute interval, 1/6× for a 6-hour interval — with no way to correct it short of a contract upgrade
 - Oracle staking and slashing mechanism in `verification_oracle`
 - `stake`, `unstake`, `claim_unstake`, `slash` functions
 - Admin-only `slash` with reason codes (admin flag / fraud proof)
@@ -44,12 +45,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `verification_oracle`: `update_config` now enforces `min_oracles <= oracle_count`, so governance cannot raise the quorum above the current registered oracle count and leave the protocol under-quorum (windows would collect submissions but never finalize)
 - Duplicate admin set in `governance` initialize
 - Max supply cap enforcement in `credit_token` mint
 - `verification_oracle`: per-oracle submission statistics now count only
   contributions to finalized windows, so resetting a pending window cannot
   inflate an oracle's reputation counters
 - `verification_oracle`: `validate_sensor_reading` now rejects out-of-range `turbidity` and `temperature` readings, closing a gap that let a malicious or malfunctioning oracle submit negative values to disable the turbidity/temperature quality penalties
+- `shared::generate_project_id` no longer folds the ledger timestamp into the SHA-256 preimage, so a project ID no longer depends on which ledger the registration transaction lands in. Off-chain systems can now pre-compute the ID before submitting; previously a one-ledger delay (fee bump, congestion) silently changed it
 
 ### Changed
 
@@ -57,6 +60,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded spec documentation with oracle window lifecycle
 - `penalize_non_revealers` now slashes a percentage of an oracle's stake (`stake * slash_pct_bps / 10_000`, clamped to `[min_slash_amount, max_slash_amount]`) instead of a flat `min(stake, min_stake)` amount, so oracles with larger stakes face proportionally larger penalties for missed reveals
 - `update_config` now validates `slash_pct_bps <= 5000` (50% max) and `min_slash_amount <= max_slash_amount`
+- **Breaking:** `shared::generate_project_id` dropped its `timestamp` parameter; the derivation is now `SHA-256(count || len(name) || name || len(methodology) || methodology || latitude || longitude || area_hectares)`. Already-registered projects keep their stored IDs; only IDs derived from this point on change. The registration timestamp is still recorded as `ProjectInfo.registration_date` / `ProjectEntry.registered_at`
+- **Breaking:** `compute_finalization` takes a trailing `window_secs: u64` parameter; both in-contract call sites pass `config.window_secs`. Direct callers (tests, off-chain reimplementations) must pass `3600` to preserve the previous behaviour
 
 ### Testing
 
