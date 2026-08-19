@@ -227,7 +227,7 @@ impl CreditToken {
     }
 
     /// Transfer contract admin rights to a new address.
-    /// This is a legacy alias for `propose_admin` with a zero timelock. 
+    /// This is a legacy alias for `propose_admin` with a zero timelock.
     /// The new admin must still call `accept_admin`.
     pub fn set_admin(e: Env, admin: Address, new_admin: Address) {
         Self::propose_admin(e, admin, new_admin, 0);
@@ -242,8 +242,12 @@ impl CreditToken {
         }
 
         let active_after = e.ledger().timestamp() + delay_secs;
-        e.storage().instance().set(&DataKey::PendingAdmin, &new_admin);
-        e.storage().instance().set(&DataKey::PendingAdminActiveAfter, &active_after);
+        e.storage()
+            .instance()
+            .set(&DataKey::PendingAdmin, &new_admin);
+        e.storage()
+            .instance()
+            .set(&DataKey::PendingAdminActiveAfter, &active_after);
 
         e.events()
             .publish((EVENT_ADMIN_PROPOSED,), (admin, new_admin, delay_secs));
@@ -262,7 +266,10 @@ impl CreditToken {
             panic!("no pending admin");
         }
 
-        let active_after: Option<u64> = e.storage().instance().get(&DataKey::PendingAdminActiveAfter);
+        let active_after: Option<u64> = e
+            .storage()
+            .instance()
+            .get(&DataKey::PendingAdminActiveAfter);
         if let Some(time) = active_after {
             if e.ledger().timestamp() < time {
                 panic!("timelock not expired");
@@ -274,7 +281,9 @@ impl CreditToken {
         let old_admin = read_admin(&e);
         e.storage().instance().set(&DataKey::Admin, &new_admin);
         e.storage().instance().remove(&DataKey::PendingAdmin);
-        e.storage().instance().remove(&DataKey::PendingAdminActiveAfter);
+        e.storage()
+            .instance()
+            .remove(&DataKey::PendingAdminActiveAfter);
 
         e.events()
             .publish((EVENT_ADMIN_TRANSFERRED,), (old_admin, new_admin));
@@ -289,7 +298,9 @@ impl CreditToken {
         }
 
         e.storage().instance().remove(&DataKey::PendingAdmin);
-        e.storage().instance().remove(&DataKey::PendingAdminActiveAfter);
+        e.storage()
+            .instance()
+            .remove(&DataKey::PendingAdminActiveAfter);
     }
 
     /// Designate the address allowed to mint credits (typically the verification oracle).
@@ -1148,7 +1159,8 @@ mod tests {
         let topic: Symbol = Symbol::try_from_val(&e, &topics.get(0).unwrap()).unwrap();
         assert_eq!(topic, symbol_short!("adm_prop"));
 
-        let (ev_old_admin, ev_new_admin, ev_delay) = <(Address, Address, u64)>::try_from_val(&e, data).unwrap();
+        let (ev_old_admin, ev_new_admin, ev_delay) =
+            <(Address, Address, u64)>::try_from_val(&e, data).unwrap();
         assert_eq!(ev_old_admin, admin);
         assert_eq!(ev_new_admin, new_admin);
         assert_eq!(ev_delay, 0);
@@ -1407,11 +1419,11 @@ mod tests {
         e.ledger().set(info);
 
         client.accept_admin(&new_admin);
-        
+
         // Old admin can't mint anymore
         let result = client.try_mint_to(&admin, &new_admin, &100);
         assert!(result.is_err());
-        
+
         // New admin can mint
         client.mint_to(&new_admin, &new_admin, &200);
         assert_eq!(client.balance(&new_admin), 200);
